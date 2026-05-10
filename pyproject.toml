@@ -1,0 +1,39 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "g4h"
+version = "0.0.1"
+description = "Hackathon spike: clean-room port of gateguard's classifier-head technique to Gemma 4 E4B."
+readme = "README.md"
+requires-python = ">=3.10"
+license = "Apache-2.0"
+authors = [{ name = "Charlemagne Labs" }]
+
+dependencies = [
+  "torch>=2.4",
+  "transformers>=4.45",
+  "peft>=0.13",
+  "datasets>=3.0",
+  "accelerate>=1.0",
+  "safetensors>=0.4",
+  "scikit-learn>=1.4",
+  "pandas>=2.0",
+  "numpy>=1.26",
+]
+
+[project.optional-dependencies]
+# Cloud-only: bitsandbytes 4-bit (nf4) is CUDA-native. Don't install on Apple Silicon.
+train = ["bitsandbytes>=0.44"]
+
+# Optional Phase 3 ONNX export.
+onnx = ["onnx>=1.16", "onnxruntime>=1.19", "optimum>=1.23"]
+
+dev = ["jupyter", "ipykernel", "ruff"]
+
+[project.urls]
+Issue = "https://github.com/Charlemagne-Labs/gateguard-suite/issues/73"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src"]

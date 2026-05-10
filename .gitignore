@@ -1,0 +1,41 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.eggs/
+build/
+dist/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+
+# Virtual envs
+.venv/
+venv/
+env/
+
+# Editor / OS
+.vscode/
+.idea/
+.DS_Store
+
+# Notebook checkpoints
+.ipynb_checkpoints/
+
+# ML artifacts (don't commit weights or large datasets)
+data/*
+!data/README.md
+!data/sample/
+checkpoints/
+runs/
+wandb/
+*.pt
+*.bin
+*.safetensors
+*.onnx
+*.tar.gz
+
+# Secrets
+.env
+.env.local
