@@ -71,6 +71,6 @@ The `[train]` extra pulls in `bitsandbytes`. Don't install it on Apple Silicon.
 ## Status
 
 - [x] Repo scaffolded
-- [ ] Phase 1 smoke test passes on M4 Max
-- [ ] Phase 2 QLoRA training run on Colab
+- [x] **Phase 1 smoke test passes on M4 Max** (2026-05-10) — `Gemma4TextModel` unwrap works, `last_hidden_state` is bit-exact equal to `output_hidden_states=True` fallback (PLE risk resolved), `q/k/v/o_proj` confirmed for LoRA. Hidden size 2560, vocab 262144, 42 layers.
+- [ ] Phase 2 QLoRA training run on Colab — first run on gateguard phishing data for baseline comparison
 - [ ] Phase 3 eval + demo
