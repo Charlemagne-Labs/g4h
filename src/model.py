@@ -72,10 +72,17 @@ def load_text_only_gemma4(
     """Load a Gemma 4 multimodal checkpoint and free the vision + audio towers.
 
     Peak memory during load is the full model size; steady state after this
-    function returns is text-only. On Colab + bnb 4-bit, the vision/audio
-    weights still get quantized before being deleted — wasteful for that brief
-    window but tolerable, and keeps the load path identical between Mac and
-    Colab.
+    function returns is text-only.
+
+    Why the explicit `.to("cpu")` step before `delattr`: under accelerate's
+    device-mapping hooks (active whenever `device_map=...` is passed) and
+    bnb 4-bit conversion, the multimodal modules retain hooks/staging tensors
+    on GPU after the Python attribute is removed. `delattr` alone leaves
+    those CUDA buffers live, and the next `prepare_model_for_kbit_training`
+    pass walks `model.parameters()` and OOMs trying to upcast them to fp32.
+    Moving to CPU first detaches the device hooks; the subsequent `delattr` +
+    `gc.collect()` + `empty_cache()` then actually returns memory to the
+    CUDA caching allocator.
     """
     kwargs: dict = {"dtype": dtype, "device_map": device_map}
     if bnb_config is not None:
@@ -87,12 +94,22 @@ def load_text_only_gemma4(
     composite = model.model if hasattr(model, "model") else model
     for attr in _MULTIMODAL_ATTRS:
         if hasattr(composite, attr):
+            mod = getattr(composite, attr)
+            try:
+                mod.to("cpu")
+            except (NotImplementedError, RuntimeError):
+                # bnb 4-bit modules sometimes refuse `.to("cpu")`. delattr
+                # alone is the best we can do — proceed.
+                pass
             delattr(composite, attr)
+            del mod
+
     gc.collect()
-    if torch.backends.mps.is_available():
-        torch.mps.empty_cache()
-    elif torch.cuda.is_available():
+    if torch.cuda.is_available():
         torch.cuda.empty_cache()
+        torch.cuda.synchronize()
+    elif torch.backends.mps.is_available():
+        torch.mps.empty_cache()
 
     return model
 
