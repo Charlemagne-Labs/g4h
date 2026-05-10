@@ -142,10 +142,33 @@ def _attach_lora(
     target_modules: Sequence[str],
     is_kbit: bool,
 ) -> nn.Module:
+    """Wrap base_lm with PEFT LoRA. For kbit (4-bit), do the prep manually
+    instead of calling `prepare_model_for_kbit_training`.
+
+    Why manual prep: PEFT's helper upcasts every non-Params4bit bf16 parameter
+    to fp32. On Gemma 4 the Per-Layer Embeddings table alone is ~2.6 B params
+    (~10.5 GB in fp32), which OOMs T4. Of the three things the helper does,
+    only requires_grad=False and gradient_checkpointing are essential for
+    QLoRA correctness — the fp32 cast is for numerical robustness of layer
+    norms during backward, which we accept the small risk on for the
+    hackathon.
+    """
     from peft import LoraConfig, get_peft_model
+
     if is_kbit:
-        from peft import prepare_model_for_kbit_training
-        base_lm = prepare_model_for_kbit_training(base_lm)
+        for p in base_lm.parameters():
+            p.requires_grad = False
+        if hasattr(base_lm, "gradient_checkpointing_enable"):
+            try:
+                base_lm.gradient_checkpointing_enable(
+                    gradient_checkpointing_kwargs={"use_reentrant": False}
+                )
+            except TypeError:
+                # older transformers signature
+                base_lm.gradient_checkpointing_enable()
+        # The LoRA adapters added below are inserted in fp32 by default —
+        # we still get fp32 grad accumulation for the trainable params.
+
     lora_cfg = LoraConfig(
         r=r,
         lora_alpha=alpha,
