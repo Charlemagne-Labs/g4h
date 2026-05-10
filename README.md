@@ -72,5 +72,6 @@ The `[train]` extra pulls in `bitsandbytes`. Don't install it on Apple Silicon.
 
 - [x] Repo scaffolded
 - [x] **Phase 1 smoke test passes on M4 Max** (2026-05-10) — `Gemma4TextModel` unwrap works, `last_hidden_state` is bit-exact equal to `output_hidden_states=True` fallback (PLE risk resolved), `q/k/v/o_proj` confirmed for LoRA. Hidden size 2560, vocab 262144, 42 layers.
-- [ ] Phase 2 QLoRA training run on Colab — first run on gateguard phishing data for baseline comparison
+- [x] **Phase 2 code complete** (2026-05-10) — `src/model.py` (text-only loader + classifier wrapper + verified unwrap traversal + corrected last-position pooling), `src/train.py` (QLoRA training loop + gateguard-compatible save format), `notebooks/02_train_colab.ipynb` wired to call `run_training`. Defaults match the gateguard 270m-it baseline recipe.
+- [ ] Phase 2 actual training run on Colab — pending
 - [ ] Phase 3 eval + demo
