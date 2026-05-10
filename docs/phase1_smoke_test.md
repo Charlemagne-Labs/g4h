@@ -109,16 +109,26 @@ Don't run the whole notebook in one click — pause after each step and check th
 
 ### Step 3 — Verify `_get_inner_base_model` unwrap
 
-**Cell prints:** `inner type`, `inner module path`, `inner has forward`, `inner has layers`.
+**Cell prints:** `inner type`, `inner module path`, `inner has forward`, `inner has layers`, `num layers`.
 
-The helper now tries three traversals: PEFT base_model unwrap, multimodal-style `.language_model` (which Gemma 4 likely uses given its composite config), and the older single-stack `.model`. Whichever attribute exists wins.
+Gemma 4 is structurally multimodal even on text-only checkpoints — `google/gemma-4-E4B-it` ships with `vision_tower`, `audio_tower`, `embed_vision`, and `embed_audio` siblings of `language_model` inside its `Gemma4Model` container. The helper handles three layouts:
 
-**Pass criteria:**
-- `inner type` is something like `Gemma4TextModel`, `Gemma4Model`, or similar — **NOT** `Gemma4ForCausalLM` (that's still wrapping the lm_head, the unwrap failed).
+  1. **PEFT wrapper**: `m.base_model.model` → `ForCausalLM`
+  2. **Single-stack (Gemma 3)**: `ForCausalLM.model` → backbone with `.layers` (one step)
+  3. **Multimodal composite (Gemma 4)**: `ForCausalLM.model` → `Gemma4Model` → `.language_model` → `Gemma4TextModel` with `.layers` (two steps)
+
+**Pass criteria for Gemma 4:**
+- `inner type: Gemma4TextModel`
+- `inner module path: transformers.models.gemma4.modeling_gemma4`
 - `inner has forward: True`
-- `inner has layers: True` (step 6 will probe these)
+- `inner has layers: True`
+- `num layers: 42`
 
-**If `inner type` is still the CausalLM wrapper:** the helper's traversal didn't go deep enough. Print `model` end-to-end (`print(model)`), find the actual attribute path to the backbone (it's the thing whose forward returns `last_hidden_state` and exposes `.layers`), and update the helper. Likely needs a second `.model` step or a different attribute name.
+**If `inner type` is `Gemma4Model`** (one step short): the helper landed on the multimodal composite. Run `[(n, type(c).__name__) for n, c in inner.named_children()]` and confirm `language_model` is among them — if so, the helper update merged but you're on a stale notebook; pull and restart the kernel. If something else (`text_model`, etc.), tell me and I'll add it to the helper.
+
+**If `inner type` is `Gemma4ForCausalLM`** (zero steps): same fix — pull and restart. The previous helper version stopped at `.model`.
+
+**Phase 2 follow-up flagged:** carrying `vision_tower` + `audio_tower` + multimodal embedders in RAM is wasted memory for a text-only classifier. They show up as ~30–40% of the model's parameters (rough; measure in Phase 2). Options to investigate when we get there: (a) freeze them and let `accelerate` skip activation memory, (b) instantiate `Gemma4TextModel.from_pretrained(MODEL_ID)` directly via the text-only sub-config, (c) custom load that drops the unused state-dict keys.
 
 ### Step 4 — One forward pass
 
