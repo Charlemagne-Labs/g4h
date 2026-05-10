@@ -50,7 +50,7 @@ The `[train]` extra pulls in `bitsandbytes`. Don't install it on Apple Silicon.
 ## Phases (per issue #73)
 
 1. **Bring-up smoke test** — load Gemma 4 E4B, verify `_get_inner_base_model` unwrap works on the new architecture, probe Per-Layer Embeddings behavior. **Runbook: [`docs/phase1_smoke_test.md`](docs/phase1_smoke_test.md).**
-2. **Port training** — `src/model.py` + `src/train.py`, QLoRA fine-tune on whichever dataset gets picked.
+2. **Port training** — `src/model.py` + `src/train.py`, QLoRA fine-tune on whichever dataset gets picked. **Runbook: [`docs/phase2_training.md`](docs/phase2_training.md)** (covers both Mac smoke + Colab full run).
 3. **Eval + demo** — `src/infer.py`, head-to-head F1 vs the 270M baseline, optional ONNX export.
 
 ## Source files being ported (in `Charlemagne-Labs/gateguard-suite` at `a9f69a2`)
