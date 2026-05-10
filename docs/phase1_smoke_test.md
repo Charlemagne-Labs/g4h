@@ -34,7 +34,7 @@ df -h ~/.cache
 
 Gemma weights are gated. You need to:
 
-1. Visit https://huggingface.co/google/gemma-4-e4b (or whatever the actual ID is — see the next step) and click **Acknowledge license**.
+1. Visit https://huggingface.co/google/gemma-4-E4B and click **Acknowledge license**.
 2. Generate a read token at https://huggingface.co/settings/tokens.
 3. Log in via CLI:
    ```bash
@@ -42,23 +42,14 @@ Gemma weights are gated. You need to:
    # paste the token when prompted
    ```
 
-### 3. Verify the actual HF Hub ID
+### 3. Model ID (verified 2026-05-10)
 
-The notebook hardcodes `MODEL_ID = "google/gemma-4-e4b"` as a placeholder. The real ID may be slightly different (`google/gemma-4-e4b-it`, `google/gemma-4-e4b-pt`, etc.). Before running:
+The notebooks now use **`google/gemma-4-E4B`** — confirmed via the HF hub listing on 2026-05-10. This is the **base** (pretrained, no `-it` instruction tuning) E4B variant, which is the right starting point for fine-tuning a classifier head. The instruction-tuned `-it` checkpoints carry chat-format priors we don't want under a classifier.
 
-```bash
-./.venv/bin/python - <<'PY'
-from huggingface_hub import HfApi
-api = HfApi()
-hits = list(api.list_models(search="gemma-4", author="google", limit=20))
-for m in hits:
-    print(m.id)
-PY
-```
-
-Pick the **base** (`-pt` for pretrained, no `-it` instruction-tuned) variant if both exist — fine-tuning works better off the pretrained base.
-
-If the ID is different, edit cell 2 of the notebook before running.
+Other variants in the family for reference:
+- `google/gemma-4-E2B` — smaller (2B effective). Use as fallback if E4B doesn't fit.
+- `google/gemma-4-E4B-it` — instruction-tuned. Don't use for classifier fine-tuning.
+- `google/gemma-4-26B-A4B`, `google/gemma-4-31B` — bigger; out of scope for the hackathon.
 
 ### 4. Venv ready
 
