@@ -179,6 +179,8 @@ Capture:
 |---|---|---|
 | `OSError: 401` during model load | HF token missing / license not accepted | Re-run cell 2; check the license page |
 | `bitsandbytes Library not found` | bnb didn't install (Colab CUDA mismatch) | `!pip install -U bitsandbytes` in a fresh cell |
+| `KeyError: 'gemma4'` / `model type gemma4 ... not recognized` | Colab pre-installed `transformers` was older than 5.8 and pip's `>=` constraint didn't trigger upgrade | `!pip install -U "transformers>=5.8"`, restart runtime, retry |
+| `RuntimeError: ... already a kernel registered ... bitsandbytes namespace` | bnb ops registered twice in one Python session (after pip-upgrade in same kernel) | Restart runtime — pip-installed version is on disk and a fresh interpreter loads only the new bnb |
 | `AttributeError: 'PeftModel' object has no attribute ...` | PEFT version mismatch with transformers | `!pip install -U "peft>=0.13"` |
 | OOM during training | Batch too big for tier | Drop `cfg.batch=4, grad_accum=4` (effective batch stays 16) |
 | Loss is nan after step 1 | bf16 numerical issue with QLoRA | Switch `bnb_4bit_compute_dtype=torch.float16` in the bnb config; or `lr=1e-4` |

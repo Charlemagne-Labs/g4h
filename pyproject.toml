@@ -13,7 +13,10 @@ authors = [{ name = "Charlemagne Labs" }]
 
 dependencies = [
   "torch>=2.4",
-  "transformers>=4.45",
+  # transformers 5.8+ is the floor for Gemma 4 (`gemma4` model_type).
+  # Earlier 5.x (e.g. Colab default 5.0.0) doesn't have it in CONFIG_MAPPING
+  # and `from_pretrained` raises KeyError: 'gemma4'.
+  "transformers>=5.8",
   "peft>=0.13",
   "datasets>=3.0",
   "accelerate>=1.0",
