@@ -22,9 +22,9 @@ If all three are green, Phase 2 (`src/model.py` and `src/train.py`) becomes a ne
 
 Run these once before opening the notebook.
 
-### 1. Disk space (~12 GB free)
+### 1. Disk space (~18 GB free)
 
-Gemma 4 E4B in bf16 is roughly 9 GB. The HF cache lands in `~/.cache/huggingface/hub/`.
+Gemma 4 E4B-it in bf16 is **~16 GB on disk** (observed 2026-05-10 — the model card's 9 GB figure is parameters-only and excludes safetensors framing + tokenizer + per-layer embeddings tables). The HF cache lands in `~/.cache/huggingface/hub/`.
 
 ```bash
 df -h ~/.cache
@@ -34,22 +34,24 @@ df -h ~/.cache
 
 Gemma weights are gated. You need to:
 
-1. Visit https://huggingface.co/google/gemma-4-E4B and click **Acknowledge license**.
+1. Visit https://huggingface.co/google/gemma-4-E4B-it and click **Acknowledge license**.
 2. Generate a read token at https://huggingface.co/settings/tokens.
 3. Log in via CLI:
    ```bash
-   ./.venv/bin/huggingface-cli login
+   ./.venv/bin/hf auth login
    # paste the token when prompted
    ```
 
-### 3. Model ID (verified 2026-05-10)
+### 3. Model ID — `google/gemma-4-E4B-it` (decided 2026-05-10)
 
-The notebooks now use **`google/gemma-4-E4B`** — confirmed via the HF hub listing on 2026-05-10. This is the **base** (pretrained, no `-it` instruction tuning) E4B variant, which is the right starting point for fine-tuning a classifier head. The instruction-tuned `-it` checkpoints carry chat-format priors we don't want under a classifier.
+The notebooks use **`google/gemma-4-E4B-it`** — the instruction-tuned variant, chosen to match the gateguard baseline (`gemma-3-270m-it`). Mirroring the baseline's variant means only **one** thing varies between baseline and new system: model size. If we used base, we'd be changing both model size and pretraining objective, making any F1 delta ambiguous.
+
+For last-token-pooled classifier heads, the IT-vs-base difference is empirically small (<1 F1 in most papers) — apples-to-apples comparison wins.
 
 Other variants in the family for reference:
-- `google/gemma-4-E2B` — smaller (2B effective). Use as fallback if E4B doesn't fit.
-- `google/gemma-4-E4B-it` — instruction-tuned. Don't use for classifier fine-tuning.
-- `google/gemma-4-26B-A4B`, `google/gemma-4-31B` — bigger; out of scope for the hackathon.
+- `google/gemma-4-E4B` — base (pretrained). Equivalent for classifier fine-tuning, worse for baseline comparability.
+- `google/gemma-4-E2B-it` — smaller (2B effective). Fallback if E4B-it doesn't fit on Colab compute.
+- `google/gemma-4-26B-A4B-it`, `google/gemma-4-31B-it` — bigger; out of scope for the hackathon.
 
 ### 4. Venv ready
 
@@ -90,30 +92,33 @@ Don't run the whole notebook in one click — pause after each step and check th
 
 **If MPS is False:** you're on Intel Mac or torch was installed without MPS. Reinstall torch from the official wheel: `./.venv/bin/pip install --upgrade --force-reinstall torch`.
 
-### Step 2 — Load Gemma 4 E4B
+### Step 2 — Load Gemma 4 E4B-it
 
-**What happens:** Downloads ~9 GB of bf16 weights on first run. Subsequent runs use the cache.
+**What happens:** Downloads ~16 GB of bf16 weights on first run. Subsequent runs use the cache.
 
 **Pass criteria:**
 - No `OSError` about gated repo (means HF auth worked)
 - No `OutOfMemoryError`
-- Prints `hidden_size`, `vocab_size`, `num_layers`. Expected per the model card: `vocab_size=262144`, `num_layers=42` (or close — the model card may have small revisions).
+- Prints `config class`, `text-tower cfg`, `hidden_size`, `vocab_size`, `num_layers`. The top-level config is **composite** (`Gemma4Config` with a nested `text_config`) — the load cell already knows to read text-tower hyperparameters from `model.config.text_config`. Expected: `vocab_size=262144`, `num_layers` around 42.
 
 **If you get gated-repo error:** Step back to Prerequisites #2 and accept the license + add the token.
 
-**If OOM during load:** Activity Monitor → check unified memory pressure. Close other GPU-using apps. If it persists, try `torch_dtype=torch.float16` instead of `bfloat16` — slightly less memory, very slightly worse numerics.
+**If OOM during load:** Activity Monitor → check unified memory pressure. Close other GPU-using apps. If it persists, try `dtype=torch.float16` instead of `bfloat16` — slightly less memory, very slightly worse numerics. (Note: transformers 5.x renamed the kwarg from `torch_dtype` to `dtype`.)
 
 **Record the printed values** in the [Results template](#results-template) at the bottom.
 
 ### Step 3 — Verify `_get_inner_base_model` unwrap
 
-**Cell prints:** `inner type`, `inner module path`, `inner has forward`.
+**Cell prints:** `inner type`, `inner module path`, `inner has forward`, `inner has layers`.
+
+The helper now tries three traversals: PEFT base_model unwrap, multimodal-style `.language_model` (which Gemma 4 likely uses given its composite config), and the older single-stack `.model`. Whichever attribute exists wins.
 
 **Pass criteria:**
-- `inner type` is something like `Gemma4Model`, `Gemma4TextModel`, or similar — **NOT** `Gemma4ForCausalLM` (that's still wrapping the lm_head, the unwrap failed).
+- `inner type` is something like `Gemma4TextModel`, `Gemma4Model`, or similar — **NOT** `Gemma4ForCausalLM` (that's still wrapping the lm_head, the unwrap failed).
 - `inner has forward: True`
+- `inner has layers: True` (step 6 will probe these)
 
-**If `inner type` is still the CausalLM wrapper:** the helper's two-step traversal didn't work. Print `model` end-to-end (`print(model)`), find the actual attribute path to the backbone (it's the thing whose forward returns `last_hidden_state`), and update the helper. Most likely fix: an extra `.model` or `.transformer` step.
+**If `inner type` is still the CausalLM wrapper:** the helper's traversal didn't go deep enough. Print `model` end-to-end (`print(model)`), find the actual attribute path to the backbone (it's the thing whose forward returns `last_hidden_state` and exposes `.layers`), and update the helper. Likely needs a second `.model` step or a different attribute name.
 
 ### Step 4 — One forward pass
 
