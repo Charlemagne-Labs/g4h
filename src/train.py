@@ -191,6 +191,7 @@ def _save_artifacts(
     model_id: str,
     max_length: int,
     is_lora: bool,
+    split_cfg: dict | None = None,
 ) -> None:
     os.makedirs(out_dir, exist_ok=True)
     tokenizer.save_pretrained(out_dir)
@@ -216,6 +217,7 @@ def _save_artifacts(
             "is_merged": False,
             "hidden_size": model.classifier.in_features,
             "num_labels": model.classifier.out_features,
+            "split": split_cfg or {},
         }, f, indent=2)
 
     print(f"Saved artifacts to: {out_dir}")
@@ -417,6 +419,14 @@ def run_training(cfg: TrainConfig, *, bnb_config=None) -> dict[str, float]:
         model_id=cfg.model_id,
         max_length=cfg.max_length,
         is_lora=True,
+        split_cfg={
+            "csv_path": os.path.basename(cfg.csv_path),
+            "text_col": cfg.text_col,
+            "label_col": cfg.label_col,
+            "val_ratio": cfg.val_ratio,
+            "test_ratio": cfg.test_ratio,
+            "seed": cfg.seed,
+        },
     )
     # Also persist the test split for downstream eval
     test_df.to_csv(os.path.join(cfg.out_dir, "test_split.csv"), index=False)

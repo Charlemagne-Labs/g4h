@@ -1,15 +1,21 @@
 """Full evaluation on the held-out test split, with a duplicate-vs-novel breakout.
 
 The test split is saved alongside the trained model (`<out_dir>/test_split.csv`).
-These rows were never seen during training. For an honest read on generalization,
-this script also splits the test predictions into:
+These rows were never seen during training. For an honest read on
+generalization, this script also splits the test predictions into:
 
-  - rows whose `text` field appears verbatim in the training CSV (memorization
-    contributes to the score on these)
-  - novel rows whose text does NOT appear in training (true generalization)
+  - rows whose `text` field appears verbatim in the **training partition**
+    (memorization contributes to the score on these)
+  - novel rows whose text does NOT appear in the training partition (true
+    generalization)
 
-Outputs a confusion matrix, sklearn classification report, and the dup/novel
-F1 breakdown side-by-side.
+To identify the training partition we re-run `_stratified_split` with the
+same seed/ratios that the trainer used. The trainer (as of commit f8f8792)
+saves these in `inference_config.json` under "split" — older artifacts fall
+back to defaults (seed=42, val_ratio=0.1, test_ratio=0.1, labels=allow/warn/block).
+
+Outputs three confusion matrices + classification reports: OVERALL, NOVEL,
+DUPLICATE.
 
 Usage:
     cd ~/CharlemagneLabs/g4h
@@ -19,8 +25,9 @@ Reads:
     runs/gemma4-e4b-cls/
         - the saved artifact directory (override with --out-dir)
         - test_split.csv (must exist in the artifact dir)
+        - inference_config.json (split params under "split", optional)
     data/latest_ft_train_data.csv
-        - the source training CSV (override with --train-csv)
+        - the source CSV the training ran on (override with --source-csv)
 """
 from __future__ import annotations
 
@@ -36,7 +43,14 @@ from sklearn.metrics import classification_report, confusion_matrix, f1_score
 from torch.utils.data import DataLoader
 
 from src.infer import load_for_inference
-from src.train import _TokenizedDataset, _tokenize
+from src.train import (
+    DEFAULT_LABELS,
+    _TokenizedDataset,
+    _build_label_maps,
+    _normalize_label,
+    _stratified_split,
+    _tokenize,
+)
 
 
 def _predict_batch(bundle, texts: list[str], batch_size: int = 8) -> np.ndarray:
@@ -80,12 +94,37 @@ def _report_block(
     print(f"Macro F1: {f1_score(y_true, y_pred, average='macro', zero_division=0):.4f}")
 
 
+def _reconstruct_train_texts(
+    source_csv: str,
+    split: dict,
+    labels: tuple[str, ...],
+) -> set[str]:
+    """Re-derive the training partition by re-running the trainer's stratified
+    split with the same seed/ratios. Returns the set of `text` values that
+    were in the training set.
+    """
+    text_col = split.get("text_col", "text")
+    label_col = split.get("label_col", "label")
+    val_ratio = float(split.get("val_ratio", 0.1))
+    test_ratio = float(split.get("test_ratio", 0.1))
+    seed = int(split.get("seed", 42))
+
+    df = pd.read_csv(source_csv)
+    df = df[~df[text_col].isna()]
+    df = df[df[text_col].astype(str).str.strip() != ""].reset_index(drop=True)
+    label2id, _ = _build_label_maps(labels)
+    df["label_id"] = df[label_col].apply(lambda x: _normalize_label(x, label2id))
+
+    train_df, _val_df, _test_df = _stratified_split(df, "label_id", val_ratio, test_ratio, seed)
+    return set(train_df[text_col].astype(str))
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--out-dir", default="runs/gemma4-e4b-cls",
                         help="Artifact directory (must contain test_split.csv)")
-    parser.add_argument("--train-csv", default="data/latest_ft_train_data.csv",
-                        help="Training CSV — used to identify duplicate texts in test")
+    parser.add_argument("--source-csv", default="data/latest_ft_train_data.csv",
+                        help="The CSV the training was sampled from (NOT the train partition).")
     parser.add_argument("--batch-size", type=int, default=8)
     parser.add_argument("--save-errors", action="store_true",
                         help="Write misclassified rows to <out_dir>/eval_errors.csv")
@@ -95,8 +134,8 @@ def main() -> int:
     if not os.path.exists(test_csv):
         print(f"ERROR: {test_csv} not found.", file=sys.stderr)
         return 1
-    if not os.path.exists(args.train_csv):
-        print(f"ERROR: {args.train_csv} not found.", file=sys.stderr)
+    if not os.path.exists(args.source_csv):
+        print(f"ERROR: {args.source_csv} not found.", file=sys.stderr)
         return 1
 
     print(f"Loading model from {args.out_dir}/ ...")
@@ -109,11 +148,27 @@ def main() -> int:
     test_df = pd.read_csv(test_csv).reset_index(drop=True)
     print(f"  test rows: {len(test_df)}")
 
-    print(f"\nReading training CSV from {args.train_csv} to identify duplicates ...")
-    train_texts = set(pd.read_csv(args.train_csv)["text"].astype(str))
+    # Reconstruct the training partition. Read split params from inference_config.json
+    # if present (training runs from commit f8f8792 onwards save these); else fall
+    # back to the trainer's defaults.
+    with open(os.path.join(args.out_dir, "inference_config.json")) as f:
+        inf_cfg = json.load(f)
+    split_cfg = inf_cfg.get("split") or {}
+    labels_used = tuple(inf_cfg.get("labels", DEFAULT_LABELS))
+    if not split_cfg:
+        print("\nWARNING: artifact has no 'split' info — falling back to defaults "
+              "(seed=42, val_ratio=0.1, test_ratio=0.1). If your training used "
+              "non-defaults, the dup/novel breakdown will be off. Pass "
+              "--source-csv to point at the original CSV.")
+    print(f"\nReconstructing training partition (seed={split_cfg.get('seed', 42)}, "
+          f"val_ratio={split_cfg.get('val_ratio', 0.1)}, "
+          f"test_ratio={split_cfg.get('test_ratio', 0.1)}) ...")
+    train_texts = _reconstruct_train_texts(args.source_csv, split_cfg, labels_used)
+    print(f"  re-derived train partition size: {len(train_texts)} unique texts")
+
     test_df["is_dup"] = test_df["text"].astype(str).apply(lambda t: t in train_texts)
     n_dup = int(test_df["is_dup"].sum())
-    print(f"  duplicates in test (text seen in train): {n_dup}/{len(test_df)}")
+    print(f"  test rows whose text was in the train partition: {n_dup}/{len(test_df)}")
 
     label_names = [bundle.id2label[i] for i in range(len(bundle.id2label))]
 

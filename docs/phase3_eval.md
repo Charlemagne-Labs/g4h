@@ -85,7 +85,7 @@ Expected wall time: ~1–2 minutes on M4 Max.
 - `--save-errors` writes misclassified rows to `runs/gemma4-e4b-cls/eval_errors.csv` for manual inspection
 - `--batch-size N` (default 8) — bump if you have headroom, drop if you OOM
 - `--out-dir <path>` — point at a different artifact directory (default `runs/gemma4-e4b-cls`)
-- `--train-csv <path>` — point at a different training CSV for duplicate detection
+- `--source-csv <path>` — point at the CSV the training was sampled from (default `data/latest_ft_train_data.csv`). The eval re-runs the same stratified split (using parameters saved in `inference_config.json`) to reconstruct the training partition, then checks which test rows duplicate it.
 
 ### What to expect
 
