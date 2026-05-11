@@ -64,14 +64,13 @@ The `[train]` extra pulls in `bitsandbytes`. Don't install it on Apple Silicon.
 
 ## Open questions still to resolve
 
-1. **Dataset** — deferred until Phase 1 is green.
-2. **Demo surface** — possibly integrate with `Charlemagne-Labs/test_suite/phase2` (replace its `llm_verdicts.py` stub with a Gemma 4 call). Decide after training works.
-3. **License file** — add `LICENSE` (Apache-2.0, matching Gemma's license) before flipping the repo public.
+1. **License file** — add `LICENSE` (Apache-2.0, matching Gemma's license) before flipping the repo public.
 
 ## Status
 
 - [x] Repo scaffolded
 - [x] **Phase 1 smoke test passes on M4 Max** (2026-05-10) — `Gemma4TextModel` unwrap works, `last_hidden_state` is bit-exact equal to `output_hidden_states=True` fallback (PLE risk resolved), `q/k/v/o_proj` confirmed for LoRA. Hidden size 2560, vocab 262144, 42 layers.
-- [x] **Phase 2 code complete** (2026-05-10) — `src/model.py` (text-only loader + classifier wrapper + verified unwrap traversal + corrected last-position pooling), `src/train.py` (QLoRA training loop + gateguard-compatible save format), `notebooks/02_train_colab.ipynb` wired to call `run_training`. Defaults match the gateguard 270m-it baseline recipe.
-- [ ] Phase 2 actual training run on Colab — pending
-- [ ] Phase 3 eval + demo
+- [x] **Phase 2 code complete** (2026-05-10) — `src/model.py` (text-only loader + classifier wrapper + verified unwrap traversal + corrected last-position pooling), `src/train.py` (QLoRA training loop + clean save format), `notebooks/02_train_colab.ipynb` wired to call `run_training`.
+- [x] **Phase 2 training run complete** (2026-05-10) — 3 epochs on `latest_ft_train_data.csv` on Colab. Validation: **99.4% F1 macro**. The 2 total errors are both block→warn (under-classifying severity), never the reverse. Dataset has 18% exact-text duplicates; non-duplicate accuracy is 99.2%, so the duplicate inflation is ~0.2 points.
+- [x] **Phase 3 code complete** (2026-05-10) — `src/infer.py` (load_for_inference + predict_one + CLI), `scripts/eval_test_split.py` (full eval on held-out test with dup-vs-novel breakdown).
+- [ ] Phase 3 eval run + writeup
