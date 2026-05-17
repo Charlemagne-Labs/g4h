@@ -31,36 +31,68 @@ import re
 from collections import Counter
 from urllib.parse import urlparse, parse_qs
 
-# Lists below are small, public, and replicated from any phishing-detection
-# 101 reference. They are NOT taken from any internal production data.
+# Lists below are small, public, and informed by samples from OpenPhish
+# (a public phishing-URL feed). They are NOT taken from any internal
+# production data.
 
+# TLDs commonly abused in phishing campaigns (sampled from current OpenPhish
+# feed: .cyou, .shop, .vip, .link, .top, .ml, etc. all appeared 9+ times in
+# a 300-URL sample). We include generic gTLDs like .digital/.site/.online
+# which are cheap and popular for fast-spun phishing domains.
 _SUSPICIOUS_TLDS = {
     ".ml", ".cf", ".tk", ".ga", ".gq",
     ".top", ".xyz", ".pw", ".live", ".rest",
+    ".cyou", ".shop", ".vip", ".link",
+    ".digital", ".site", ".online", ".click", ".work", ".life",
 }
 
 # Free / dynamic hosting platforms commonly hosting phishing pages.
+# github.io is included despite many legitimate uses — it appeared 27 times
+# in our 300-URL OpenPhish sample as a phishing host. The model has both
+# allow and block training examples for github.io, so this is a soft signal.
 _FREE_HOSTING = {
     "netlify.app", "vercel.app", "pages.dev", "herokuapp.com",
-    "blogspot.com", "wuaze.com", "000webhostapp.com", "github.io",
-    "weebly.com", "wixsite.com",
+    "blogspot.com", "wuaze.com", "000webhostapp.com",
+    "weebly.com", "weeblysite.com", "wixsite.com",
+    "github.io", "framer.app", "workers.dev", "iceiy.com",
+    "alwaysdata.net", "r2.dev", "sevalla.page", "dweb.link",
+    "compute-1.amazonaws.com", "compute.amazonaws.com",
+    "azurewebsites.net", "cloudfront.net",
 }
 
-# Tiny brand-impersonation reference. Each entry maps a brand label to
-# its canonical apex domain.
+# Brand-impersonation reference. Expanded from the OpenPhish sample where
+# roblox/outlook/chase/att/bancolombia/imtoken/bet365 etc. were all
+# represented.
 _OFFICIAL_BRANDS = {
+    # Big tech / consumer
     "google": "google.com", "paypal": "paypal.com",
     "microsoft": "microsoft.com", "apple": "apple.com",
     "amazon": "amazon.com", "facebook": "facebook.com",
     "instagram": "instagram.com", "linkedin": "linkedin.com",
     "netflix": "netflix.com", "github": "github.com",
+    "outlook": "outlook.com", "roblox": "roblox.com",
+    "ebay": "ebay.com", "att": "att.com",
+    # Financial
     "coinbase": "coinbase.com", "wellsfargo": "wellsfargo.com",
+    "chase": "chase.com", "fidelity": "fidelity.com",
+    "bancolombia": "bancolombia.com", "santander": "santander.com",
+    "itau": "itau.com.br", "bradesco": "bradesco.com.br",
+    # Crypto / wallets
+    "binance": "binance.com", "imtoken": "token.im",
+    "metamask": "metamask.io", "trustwallet": "trustwallet.com",
+    # Other
+    "bet365": "bet365.com",
 }
 
 _PHISHING_PHRASES = (
+    # English
     "verify", "suspend", "restrict", "expire", "urgent",
     "confirm", "secure-update", "account-update", "verify-account",
-    "unlock", "limited", "reactivate", "expired",
+    "unlock", "limited", "reactivate", "expired", "reward",
+    "claim", "winner", "prize", "gift-card",
+    # Spanish / Portuguese (common in LATAM-targeted phishing)
+    "verificar", "actualizar", "atualizar", "acceder", "acesso",
+    "cadastro", "seguranca", "seguridad", "confirmar", "ingresar",
 )
 
 _CREDENTIAL_KEYWORDS = ("login", "signin", "auth", "sign-in", "log-in")
@@ -273,13 +305,24 @@ def extract_indicators(url: str) -> list[str]:
             if e > 3.3:
                 out.append(_ind("domain:high_entropy", entropy=round(e, 2)))
 
-    # Keyword stuffing: 3+ phishing keywords joined in the hostname
+    # Keyword stuffing: phishing keywords in the hostname.
+    # Two tiers:
+    #   HIGH_SIGNAL — LATAM financial/registration words. Strong enough to
+    #     fire on a single hit (legit sites rarely have "cadastro" or
+    #     "bancolombia" in non-bank hostnames).
+    #   LOW_SIGNAL — generic English words also common on legit sites.
+    #     Requires 2+ hits to fire.
     host_lower = host.lower()
-    stuffing_hits = sum(1 for kw in (
-        "secure", "login", "verify", "account", "bank", "update", "support"
-    ) if kw in host_lower)
-    if stuffing_hits >= 2:
-        out.append(_ind("domain:keyword_stuffing", count=stuffing_hits))
+    high_signal = ("cadastro", "banco", "conta", "cuenta",
+                   "seguranca", "seguridad", "bancolombia", "santander",
+                   "bradesco")
+    low_signal = ("secure", "login", "verify", "account", "bank", "update",
+                  "support", "auth", "signin", "confirm", "official",
+                  "acesso", "cliente", "acceso", "ingresar")
+    high_hits = sum(1 for kw in high_signal if kw in host_lower)
+    low_hits = sum(1 for kw in low_signal if kw in host_lower)
+    if high_hits >= 1 or (high_hits + low_hits) >= 2:
+        out.append(_ind("domain:keyword_stuffing", count=high_hits + low_hits))
 
     if not out:
         out.append("meta:no_indicators:{}")
