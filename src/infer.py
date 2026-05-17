@@ -69,7 +69,20 @@ def load_for_inference(
     label2id = {k: int(v) for k, v in lm["label2id"].items()}
     id2label = {int(k): v for k, v in lm["id2label"].items()}
 
-    tokenizer = AutoTokenizer.from_pretrained(out_dir)
+    # Load tokenizer. The saved tokenizer files can break across transformers
+    # versions (e.g. Gemma 4's `extra_special_tokens` field shifted from list
+    # to dict between minor versions). The tokenizer is identical to the
+    # base model's anyway since we didn't add tokens — fall back to base on
+    # any load error.
+    try:
+        tokenizer = AutoTokenizer.from_pretrained(out_dir)
+    except Exception as e:
+        import logging
+        logging.getLogger(__name__).warning(
+            "tokenizer load from %s failed (%s); falling back to %s",
+            out_dir, type(e).__name__, cfg["base_model_id"],
+        )
+        tokenizer = AutoTokenizer.from_pretrained(cfg["base_model_id"])
     tokenizer.padding_side = "left"
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
