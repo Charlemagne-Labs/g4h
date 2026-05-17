@@ -2,3 +2,12 @@ fastapi>=0.115
 uvicorn[standard]>=0.32
 pydantic>=2.9
 playwright>=1.48
+
+# Re-assert the model deps floor so this requirements file is sufficient
+# to spin up a fresh venv that can serve. transformers<5.8 doesn't know
+# about Gemma 4's model_type and the lifespan crashes.
+transformers>=5.8
+peft>=0.13
+torch>=2.4
+accelerate>=1.0
+safetensors>=0.4
