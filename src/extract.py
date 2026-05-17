@@ -26,8 +26,10 @@ Output:
 from __future__ import annotations
 
 import json
+import math
 import re
-from urllib.parse import urlparse
+from collections import Counter
+from urllib.parse import urlparse, parse_qs
 
 # Lists below are small, public, and replicated from any phishing-detection
 # 101 reference. They are NOT taken from any internal production data.
@@ -58,11 +60,37 @@ _OFFICIAL_BRANDS = {
 _PHISHING_PHRASES = (
     "verify", "suspend", "restrict", "expire", "urgent",
     "confirm", "secure-update", "account-update", "verify-account",
+    "unlock", "limited", "reactivate", "expired",
 )
 
 _CREDENTIAL_KEYWORDS = ("login", "signin", "auth", "sign-in", "log-in")
 
+# Well-known URL shorteners that often hide phishing destinations.
+_URL_SHORTENERS = {
+    "bit.ly", "tinyurl.com", "t.co", "goo.gl", "ow.ly",
+    "is.gd", "buff.ly", "rebrand.ly", "shorturl.at", "cutt.ly",
+}
+
+# Cross-channel mention keywords (telegram/whatsapp/skype/discord/crypto
+# wallet refs in URLs are training-data indicators).
+_CROSS_CHANNEL = {
+    "telegram": "telegram", "t.me": "telegram",
+    "whatsapp": "whatsapp", "wa.me": "whatsapp",
+    "discord": "discord", "discord.gg": "discord",
+    "skype": "skype",
+    "metamask": "crypto", "wallet": "crypto",
+}
+
+# Sensitive file extensions or paths that signal payload-style attacks.
+_SENSITIVE_PATH_BITS = (".exe", ".scr", ".zip", ".rar", "/admin", "/wp-admin")
+
+# Query parameter names that hint at credential capture or open redirects.
+_REDIRECT_PARAMS = {"redirect", "url", "next", "return", "returnurl", "continue", "redir"}
+_CREDENTIAL_PARAMS = {"key", "pin", "otp", "token", "session"}
+
 _IP_HOSTNAME_RE = re.compile(r"^\d{1,3}(?:\.\d{1,3}){3}$")
+_PCT_ENCODED_RE = re.compile(r"%[0-9A-Fa-f]{2}")
+_NON_ASCII_RE = re.compile(r"[^\x00-\x7f]")
 
 
 def _ind(category_name: str, **kwargs) -> str:
@@ -85,6 +113,16 @@ def _edit_distance(a: str, b: str) -> int:
 
 
 _HOST_TOKEN_RE = re.compile(r"[.\-_]")
+
+
+def _shannon_entropy(s: str) -> float:
+    """Bits-per-character entropy. High values suggest a random-looking
+    (DGA-like) domain string."""
+    if not s:
+        return 0.0
+    counts = Counter(s)
+    total = len(s)
+    return -sum((c / total) * math.log2(c / total) for c in counts.values())
 
 
 def _is_brand_lookalike(host: str) -> tuple[bool, str | None]:
@@ -178,6 +216,70 @@ def extract_indicators(url: str) -> list[str]:
     # Credential capture signal
     if any(kw in path for kw in _CREDENTIAL_KEYWORDS):
         out.append("intent:credential_capture:{}")
+
+    # --- New URL-only signals (Phase 4 expansion) ---
+
+    # Long URL (commonly used to hide the real destination)
+    if len(url) > 100:
+        out.append(_ind("url:long_url", length=len(url)))
+
+    # Known URL shorteners
+    if any(host == sh or host.endswith("." + sh) for sh in _URL_SHORTENERS):
+        out.append(_ind("url:url_shortener", host=host))
+
+    # Excessive %-encoded characters in path (>5 → likely obfuscation)
+    enc_count = len(_PCT_ENCODED_RE.findall(parsed.path or ""))
+    if enc_count >= 5:
+        out.append(_ind("path:excessive_encoding", count=enc_count))
+
+    # Non-ASCII in path (mixed scripts / homograph attempts)
+    if _NON_ASCII_RE.search(parsed.path or ""):
+        out.append("path:mixed_scripts:{}")
+
+    # Sensitive file extension / admin paths
+    for bit in _SENSITIVE_PATH_BITS:
+        if bit in path:
+            out.append(_ind("path:sensitive_keyword_file", marker=bit))
+            break
+
+    # Redirect chain hints in query string
+    query_params = parse_qs(query) if query else {}
+    for q in query_params:
+        if q.lower() in _REDIRECT_PARAMS:
+            out.append(_ind("query:external_redirect", param=q))
+            break
+
+    # Credential-looking query params (key=, pin=, otp=)
+    for q in query_params:
+        ql = q.lower()
+        if ql in _CREDENTIAL_PARAMS:
+            out.append(_ind(f"context_field:{ql}", param=q))
+            break  # one is enough to signal
+
+    # Cross-channel mentions (telegram, whatsapp, etc. embedded in URL)
+    full_url_text = (host + " " + path + " " + query).lower()
+    for needle, channel in _CROSS_CHANNEL.items():
+        if needle in full_url_text:
+            out.append(_ind(f"cross_channel:{channel}_mention", token=needle))
+            break
+
+    # High-entropy registered domain (random-looking, DGA-ish).
+    # Threshold 3.3 catches all-unique consonant strings (entropy ~3.5+)
+    # without over-firing on normal English domains (entropy ~2.5-3.0).
+    if "." in host:
+        registered = host.rsplit(".", 2)[0] if host.count(".") >= 2 else host.split(".")[0]
+        if len(registered) >= 7:
+            e = _shannon_entropy(registered)
+            if e > 3.3:
+                out.append(_ind("domain:high_entropy", entropy=round(e, 2)))
+
+    # Keyword stuffing: 3+ phishing keywords joined in the hostname
+    host_lower = host.lower()
+    stuffing_hits = sum(1 for kw in (
+        "secure", "login", "verify", "account", "bank", "update", "support"
+    ) if kw in host_lower)
+    if stuffing_hits >= 2:
+        out.append(_ind("domain:keyword_stuffing", count=stuffing_hits))
 
     if not out:
         out.append("meta:no_indicators:{}")

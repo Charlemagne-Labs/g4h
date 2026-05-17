@@ -277,6 +277,42 @@ a:hover { text-decoration: underline; }
   border: 1px solid var(--red);
 }
 
+/* Timing strip below the verdict — highlights model inference latency. */
+.timing-strip {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-bottom: 18px;
+}
+.timing-cell {
+  flex: 1;
+  min-width: 120px;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 8px 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.timing-cell.predict { border-color: var(--red); background: var(--red-soft); }
+.timing-label {
+  font-family: var(--font-mono);
+  font-size: 9.5px;
+  letter-spacing: 1.5px;
+  text-transform: uppercase;
+  color: var(--text-tertiary);
+}
+.timing-cell.predict .timing-label { color: var(--red); }
+.timing-value {
+  font-family: var(--font-mono);
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text-primary);
+  letter-spacing: 0.5px;
+}
+.timing-cell.predict .timing-value { color: var(--red); }
+
 .scores {
   display: grid;
   grid-template-columns: repeat(3, 1fr);

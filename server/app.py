@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import logging
 import os
+import time
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any
@@ -77,6 +78,7 @@ class PredictResponse(BaseModel):
     indicators: list[str]
     indicator_text: str
     fetch_meta: dict[str, Any] | None = None
+    timing_ms: dict[str, float] = Field(default_factory=dict)
 
 
 # --- Routes ---
@@ -104,13 +106,19 @@ async def predict(req: PredictRequest):
     if not url:
         raise HTTPException(400, "url is required")
 
+    timing: dict[str, float] = {}
+    t_start = time.perf_counter()
+
     # 1. URL-only extraction (instant)
+    t0 = time.perf_counter()
     indicators = extract_indicators(url)
+    timing["extract_ms"] = round((time.perf_counter() - t0) * 1000, 1)
     fetch_meta: dict[str, Any] | None = None
 
     # 2. Optional DOM enrichment (slow)
     if req.fetch_dom:
         log.info("fetch_dom=True for %s", url[:80])
+        t0 = time.perf_counter()
         try:
             result = await fetch_enrich(url)
             fetch_meta = {
@@ -120,20 +128,27 @@ async def predict(req: PredictRequest):
                 "title": result.title,
                 "error": result.error,
             }
-            # Drop the meta-only no_indicators sentinel if we added real ones
             if result.indicators and indicators == ["meta:no_indicators:{}"]:
                 indicators = []
             indicators.extend(result.indicators)
         except Exception as e:
             log.exception("fetch_enrich failed")
             fetch_meta = {"error": f"{type(e).__name__}: {str(e)[:200]}"}
+        timing["dom_fetch_ms"] = round((time.perf_counter() - t0) * 1000, 1)
 
     indicator_text = " ".join(indicators)
 
     # 3. Predict
+    t0 = time.perf_counter()
     label, scores = predict_one(_bundle, indicator_text)
-    log.info("predict url=%r label=%s top_score=%.3f n_indicators=%d",
-             url[:80], label, max(scores.values()), len(indicators))
+    timing["predict_ms"] = round((time.perf_counter() - t0) * 1000, 1)
+    timing["total_ms"] = round((time.perf_counter() - t_start) * 1000, 1)
+
+    log.info(
+        "predict url=%r label=%s top=%.3f n_ind=%d ms_extract=%.1f ms_dom=%.1f ms_predict=%.1f",
+        url[:80], label, max(scores.values()), len(indicators),
+        timing["extract_ms"], timing.get("dom_fetch_ms", 0.0), timing["predict_ms"],
+    )
 
     return PredictResponse(
         label=label,
@@ -141,6 +156,7 @@ async def predict(req: PredictRequest):
         indicators=indicators,
         indicator_text=indicator_text,
         fetch_meta=fetch_meta,
+        timing_ms=timing,
     )
 
 

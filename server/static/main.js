@@ -13,6 +13,7 @@ const indicatorsEl = $("#indicators");
 const fetchMetaBlock = $("#fetch-meta-block");
 const fetchMetaEl = $("#fetch-meta");
 const modelInputEl = $("#model-input");
+const timingEl = $("#timing");
 
 const INDICATOR_CATEGORIES = ["url", "security", "domain", "intent", "content", "hosting", "fetch", "meta"];
 
@@ -50,6 +51,28 @@ function renderIndicators(indicators) {
     span.className = "indicator " + categoryFor(ind);
     span.textContent = ind;
     indicatorsEl.appendChild(span);
+  }
+}
+
+function renderTiming(timing) {
+  timingEl.innerHTML = "";
+  if (!timing || Object.keys(timing).length === 0) return;
+  // Order: extract, dom_fetch (if present), predict (highlighted), total
+  const cells = [
+    { label: "extract", value: timing.extract_ms, klass: "" },
+  ];
+  if (timing.dom_fetch_ms !== undefined) {
+    cells.push({ label: "dom fetch", value: timing.dom_fetch_ms, klass: "" });
+  }
+  cells.push({ label: "model inference", value: timing.predict_ms, klass: "predict" });
+  cells.push({ label: "total", value: timing.total_ms, klass: "" });
+
+  for (const { label, value, klass } of cells) {
+    const cell = document.createElement("div");
+    cell.className = "timing-cell " + klass;
+    const ms = value !== undefined ? `${value.toFixed(1)} ms` : "—";
+    cell.innerHTML = `<span class="timing-label">${label}</span><span class="timing-value">${ms}</span>`;
+    timingEl.appendChild(cell);
   }
 }
 
@@ -114,6 +137,7 @@ async function classify() {
 
     verdictLabel.textContent = data.label;
     verdictLabel.className = "verdict-tag " + data.label;
+    renderTiming(data.timing_ms);
     renderScores(data.scores, data.label);
     renderIndicators(data.indicators);
     renderFetchMeta(data.fetch_meta);
@@ -121,7 +145,9 @@ async function classify() {
 
     result.classList.remove("hidden");
     status.className = "status-line";
-    status.textContent = `DONE IN ${elapsed}s · ${data.indicators?.length || 0} INDICATORS`;
+    const predictMs = data.timing_ms?.predict_ms;
+    const predictBlurb = predictMs !== undefined ? ` · MODEL: ${predictMs.toFixed(0)}ms` : "";
+    status.textContent = `DONE IN ${elapsed}s${predictBlurb} · ${data.indicators?.length || 0} INDICATORS`;
   } catch (e) {
     status.className = "status-line error";
     status.textContent = "ERROR: " + e.message;
