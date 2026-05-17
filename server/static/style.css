@@ -1,5 +1,10 @@
-/* Operation Knight design system — applied to g4h live demo.
- * Tokens reproduced inline rather than imported from a design system bundle. */
+/* Charley · Gemma 4 E4B demo — visual styling.
+ *
+ * Uses the Operation Knight design system (Charlemagne Labs internal
+ * design language: dark backgrounds, red CHARLEY-style wordmark,
+ * monospace section labels in red at letter-spacing 2px, soft-color
+ * accent tags). Tokens reproduced inline rather than imported from a
+ * design-system bundle so this file is self-contained. */
 
 :root {
   --bg: #0C0C0E;

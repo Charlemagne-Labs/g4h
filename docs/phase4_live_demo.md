@@ -27,7 +27,7 @@ server/
 ├── requirements.txt    FastAPI + uvicorn + playwright
 ├── Dockerfile          GPU-aware (nvidia/cuda base) container
 └── static/
-    ├── index.html      Single-page Operation Knight themed UI
+    ├── index.html      Single-page UI — "Charley · Gemma 4 E4B demo"
     ├── style.css       Design system tokens + components
     └── main.js         Form submit + result rendering
 ```
