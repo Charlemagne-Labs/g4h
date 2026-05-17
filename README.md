@@ -72,7 +72,14 @@ g4h/
 ├── src/
 │   ├── model.py              # CausalLMWithClassifier + _get_inner_base_model unwrap
 │   ├── train.py              # QLoRA training loop + dataset split + save_artifacts
-│   └── infer.py              # load_for_inference + predict_one + CLI
+│   ├── infer.py              # load_for_inference + predict_one + CLI
+│   └── extract.py            # URL-only feature extractor (clean-room, ~150 LOC)
+├── server/                   # live-demo webapp (Phase 4)
+│   ├── app.py                # FastAPI with /predict + lifespan-loaded model
+│   ├── fetch.py              # Playwright targeted DOM fetch (optional enrichment)
+│   ├── static/               # Operation Knight themed UI
+│   ├── Dockerfile            # GPU-aware container
+│   └── requirements.txt
 ├── scripts/
 │   ├── mac_smoke_train.py    # 5-min M-series smoke run (100 rows, 1 epoch)
 │   └── eval_test_split.py    # full eval w/ novel-vs-duplicate breakdown
@@ -80,9 +87,10 @@ g4h/
 │   ├── 01_smoke_test.ipynb   # local Mac MPS: verify model load + unwrap helper
 │   └── 02_train_colab.ipynb  # cloud GPU: QLoRA training run
 ├── docs/
-│   ├── phase1_smoke_test.md  # runbook for Phase 1
-│   ├── phase2_training.md    # runbook for Phase 2 (Mac smoke + Colab full)
-│   └── phase3_eval.md        # runbook for Phase 3
+│   ├── phase1_smoke_test.md
+│   ├── phase2_training.md
+│   ├── phase3_eval.md
+│   └── phase4_live_demo.md   # webapp + AWS deploy runbook
 ├── data/                     # gitignored except for README + samples
 └── pyproject.toml
 ```
@@ -117,6 +125,7 @@ Each phase has a standalone runbook with pass criteria, failure modes, and a res
 1. **[Phase 1 — bring-up smoke test](docs/phase1_smoke_test.md)** *(M-series Mac, ~5 min)*. Load `google/gemma-4-E4B-it`, verify the `_get_inner_base_model` unwrap returns a working `Gemma4TextModel`, and confirm that `last_hidden_state` is bit-exact equal to the `output_hidden_states=True` fallback (resolves the Per-Layer Embeddings risk).
 2. **[Phase 2 — QLoRA training](docs/phase2_training.md)** *(Colab T4/L4/A100, 25–90 min)*. Text-only model load (vision/audio towers dropped post-load — ~30–40% memory saved). QLoRA via `bitsandbytes` nf4 with custom prep that skips PEFT's `prepare_model_for_kbit_training` (it OOMs on Gemma 4's giant PLE tables). 3 epochs, last-position pooling for left-padded inputs.
 3. **[Phase 3 — held-out evaluation](docs/phase3_eval.md)** *(M-series Mac, ~2 min)*. Reconstruct the training partition deterministically from the saved seed/ratios, then split test rows into novel vs. duplicate. Report overall + novel + duplicate confusion matrices.
+4. **[Phase 4 — live webapp](docs/phase4_live_demo.md)** *(AWS EC2 g5.xlarge, ~30 min setup)*. FastAPI server with a clean-room URL feature extractor and optional Playwright DOM fetch enrichment. Operation Knight themed frontend. Dockerized, deploys to EC2 in 5 commands.
 
 ---
 

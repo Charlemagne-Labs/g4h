@@ -1,0 +1,79 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>g4h — Gemma 4 phishing classifier</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Instrument+Sans:ital,wght@0,400..700&family=DM+Mono:wght@400;500&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+
+<header class="topbar">
+  <div class="brand"><span class="brand-knight">KNIGHT</span> <span class="brand-tail">// g4h gemma 4 classifier</span></div>
+  <div class="topbar-meta">v0.1 · live demo</div>
+</header>
+
+<main class="container">
+
+  <section class="hero">
+    <div class="section-label">operation knight // live demo</div>
+    <h1 class="title">Classify a URL.</h1>
+    <p class="subtitle">QLoRA fine-tune of <span class="mono">google/gemma-4-E4B-it</span> over the gateguard phishing-indicator taxonomy. Paste a URL — the server extracts indicators (URL-only or with a server-side DOM fetch), runs the classifier, returns a verdict.</p>
+  </section>
+
+  <section class="card input-card">
+    <div class="input-row">
+      <label for="url" class="field-label">URL TO CLASSIFY</label>
+      <input id="url" type="text" placeholder="https://example.com/login" autocomplete="off" spellcheck="false">
+    </div>
+    <div class="controls-row">
+      <label class="checkbox">
+        <input type="checkbox" id="fetch-dom">
+        <span class="checkbox-label">FETCH DOM (slower; richer indicators via Playwright)</span>
+      </label>
+      <button id="classify" class="cta-primary">CLASSIFY</button>
+    </div>
+    <div id="status" class="status-line" aria-live="polite"></div>
+  </section>
+
+  <section id="result" class="card result-card hidden">
+    <div class="verdict-row">
+      <span class="section-label">verdict</span>
+      <span id="verdict-label" class="verdict-tag"></span>
+    </div>
+    <div class="scores" id="scores"></div>
+
+    <div class="result-block">
+      <div class="section-label">extracted indicators</div>
+      <div id="indicators" class="indicators"></div>
+    </div>
+
+    <div class="result-block hidden" id="fetch-meta-block">
+      <div class="section-label">dom fetch</div>
+      <div id="fetch-meta" class="fetch-meta"></div>
+    </div>
+
+    <div class="result-block">
+      <div class="section-label">model input</div>
+      <pre id="model-input" class="model-input"></pre>
+    </div>
+  </section>
+
+  <section class="card disclaimer">
+    <div class="section-label">about</div>
+    <p>The URL-only extractor implements ~12 URL-string-derivable indicators (IP hostname, suspicious TLD, brand impersonation, free-hosting platforms, etc.). The optional DOM fetch adds ~6 header/DOM signals (CSP, HSTS, login-form analysis). The model was trained on richer feature-extracted indicators; this minimal extractor is a clean-room implementation for the open-source demo.</p>
+    <p>Don't point this at anything you wouldn't open in a sandboxed browser tab. The DOM fetch executes the target page's JavaScript inside the server's headless Chromium.</p>
+  </section>
+
+</main>
+
+<footer class="footer">
+  <span class="mono">github.com/Charlemagne-Labs/g4h</span>
+</footer>
+
+<script src="/static/main.js"></script>
+</body>
+</html>
