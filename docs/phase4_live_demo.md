@@ -216,25 +216,105 @@ open http://$EC2:8000    # macOS — or just paste the URL in a browser
 
 Try a few URLs. Watch the timing strip in the result panel — model inference should be ~80-150 ms on A10G.
 
-### 7. (Optional) Free HTTPS via Cloudflare Tunnel
+### 7. HTTPS — pick one of these paths
 
-For sharing with judges you usually want a `https://...trycloudflare.com` link instead of raw HTTP-on-IP.
+For sharing the demo with judges. Two options ordered by stability:
 
-Inside EC2:
+#### Path 7a — Caddy + Route 53 + Elastic IP (recommended; stable subdomain)
+
+Used by the reference deployment at `charley-g4demo.charlemagnelabs.ai`. Stable subdomain, free auto-renewing Let's Encrypt cert, no external tunnel.
+
+**Pre-req**: a domain with a hosted zone in Route 53.
+
+1. **Allocate an Elastic IP** (EC2 console → Elastic IPs → Allocate → Associate with the `g4h-demo` instance). EC2 public IPs change on every stop/start; EIPs stick. Free while attached to a running instance. Note the IP — call it `$EIP`.
+
+2. **Open ports 80 and 443** in the security group (HTTP and HTTPS, source 0.0.0.0/0). You can also remove the 8000 rule once Caddy is fronting it — only port 443 needs to be public.
+
+3. **Add an A record in Route 53**: `demo.yourdomain.com` → `$EIP`, TTL 60, Simple routing. Propagates in seconds.
+
+4. **Install Caddy on EC2**:
+
+   ```bash
+   sudo apt install -y debian-keyring debian-archive-keyring apt-transport-https curl
+   curl -1sLf 'https://dl.cloudsmith.io/public/caddy/stable/gpg.key' | sudo gpg --dearmor -o /usr/share/keyrings/caddy-stable-archive-keyring.gpg
+   curl -1sLf 'https://dl.cloudsmith.io/public/caddy/stable/debian.deb.txt' | sudo tee /etc/apt/sources.list.d/caddy-stable.list
+   sudo apt update && sudo apt install -y caddy
+   ```
+
+5. **Configure Caddy** with a reverse proxy to the container:
+
+   ```bash
+   sudo tee /etc/caddy/Caddyfile > /dev/null <<'EOF'
+   demo.yourdomain.com {
+       reverse_proxy localhost:8000 {
+           transport http {
+               response_header_timeout 30s
+           }
+       }
+       request_body {
+           max_size 1MB
+       }
+   }
+   EOF
+   # Replace the subdomain in the Caddyfile with your real one, then:
+   sudo systemctl reload caddy
+   sudo journalctl -u caddy -f
+   # Wait for: "certificate obtained successfully"
+   ```
+
+6. **Verify**:
+
+   ```bash
+   curl https://demo.yourdomain.com/health
+   # {"status":"ok","model_loaded":true}
+   ```
+
+**What survives what** with this setup:
+
+| Event | Survives? | Why |
+|---|---|---|
+| Docker restart | ✓ | Caddy proxies to `localhost:8000` regardless of container lifecycle |
+| EC2 stop/start | ✓ | EIP stays attached, Route 53 record unchanged, Caddy starts on boot via systemd |
+| EC2 reboot | ✓ | Same as above |
+| Caddy crashes | ✓ | systemd `Restart=on-failure` default |
+| Cert expiry | ✓ | Auto-renewed by Caddy ~30 days before expiry |
+| Caddyfile edits | Zero-downtime reload: `sudo systemctl reload caddy` | |
+
+#### Path 7b — Cloudflare quick tunnel (no domain needed; URL rotates)
+
+Fallback if you don't have a Route-53-managed domain. URL is `https://random-words.trycloudflare.com` and changes every time `cloudflared` restarts (e.g., on EC2 stop/start).
 
 ```bash
 curl -L --output cloudflared.deb https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64.deb
 sudo dpkg -i cloudflared.deb
-sudo apt install -y tmux
 
-tmux new -s tunnel
-cloudflared tunnel --url http://localhost:8000
-# Prints: https://something-random-words.trycloudflare.com — your public URL.
-# Ctrl-B then D to detach the tmux session (tunnel keeps running).
-# To reattach: tmux attach -t tunnel
+sudo tee /etc/systemd/system/g4h-tunnel.service > /dev/null <<'EOF'
+[Unit]
+Description=Cloudflare quick tunnel for g4h demo
+After=docker.service
+Requires=docker.service
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/cloudflared tunnel --url http://localhost:8000 --no-autoupdate
+Restart=always
+RestartSec=10
+User=ubuntu
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+sudo systemctl daemon-reload
+sudo systemctl enable --now g4h-tunnel
+
+# Find the URL:
+sudo journalctl -u g4h-tunnel -n 50 --no-pager | grep trycloudflare.com
 ```
 
-The tunnel runs until the EC2 instance stops or you Ctrl-C it. After an EC2 stop/start, re-run the tmux + cloudflared commands.
+#### Path 7c — Cloudflare named tunnel (stable URL via Cloudflare-managed DNS)
+
+If your domain is on Cloudflare DNS (not Route 53), use this instead of 7a. See <https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/get-started/> — the dashboard wizard produces a `cloudflared service install <token>` command that handles everything.
 
 ---
 

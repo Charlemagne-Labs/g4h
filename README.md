@@ -1,8 +1,13 @@
 # g4h — Gemma 4 hackathon classifier head
 
-QLoRA fine-tune of `google/gemma-4-E4B-it` for 3-class phishing-indicator classification (`allow` / `warn` / `block`). End-to-end pipeline in ~900 LOC: data load → fine-tune → save → eval → predict CLI.
+QLoRA fine-tune of `google/gemma-4-E4B-it` for 3-class phishing-indicator classification (`allow` / `warn` / `block`). End-to-end pipeline in ~900 LOC: data load → fine-tune → save → eval → predict CLI → live webapp.
 
 Submission for the Gemma 4 hackathon. Original tracking: [`Charlemagne-Labs/gateguard-suite#73`](https://github.com/Charlemagne-Labs/gateguard-suite/issues/73).
+
+> **Live demo — paste a URL, get a classification**
+> [`https://charley-g4demo.charlemagnelabs.ai`](https://charley-g4demo.charlemagnelabs.ai)
+>
+> Server-side feature extraction + optional Playwright DOM fetch + trained Gemma 4 inference. Try with and without the FETCH DOM toggle; per-phase timing breakdown is shown in the response (model inference is the red cell). Running on a single EC2 g5.xlarge (NVIDIA A10G).
 
 ---
 
@@ -125,7 +130,7 @@ Each phase has a standalone runbook with pass criteria, failure modes, and a res
 1. **[Phase 1 — bring-up smoke test](docs/phase1_smoke_test.md)** *(M-series Mac, ~5 min)*. Load `google/gemma-4-E4B-it`, verify the `_get_inner_base_model` unwrap returns a working `Gemma4TextModel`, and confirm that `last_hidden_state` is bit-exact equal to the `output_hidden_states=True` fallback (resolves the Per-Layer Embeddings risk).
 2. **[Phase 2 — QLoRA training](docs/phase2_training.md)** *(Colab T4/L4/A100, 25–90 min)*. Text-only model load (vision/audio towers dropped post-load — ~30–40% memory saved). QLoRA via `bitsandbytes` nf4 with custom prep that skips PEFT's `prepare_model_for_kbit_training` (it OOMs on Gemma 4's giant PLE tables). 3 epochs, last-position pooling for left-padded inputs.
 3. **[Phase 3 — held-out evaluation](docs/phase3_eval.md)** *(M-series Mac, ~2 min)*. Reconstruct the training partition deterministically from the saved seed/ratios, then split test rows into novel vs. duplicate. Report overall + novel + duplicate confusion matrices.
-4. **[Phase 4 — live webapp](docs/phase4_live_demo.md)** *(AWS EC2 g5.xlarge, ~30 min setup)*. FastAPI server with a clean-room URL feature extractor and optional Playwright DOM fetch enrichment. "Charley · Gemma 4 E4B demo" frontend (uses the Charlemagne Labs Operation Knight design language). Dockerized, deploys to EC2 in 5 commands.
+4. **[Phase 4 — live webapp](docs/phase4_live_demo.md)** *(AWS EC2 g5.xlarge, deployed at [charley-g4demo.charlemagnelabs.ai](https://charley-g4demo.charlemagnelabs.ai))*. FastAPI server with a clean-room URL feature extractor and optional Playwright DOM fetch enrichment. "Charley · Gemma 4 E4B demo" frontend (uses the Charlemagne Labs Operation Knight design language). Dockerized, deployed on a single g5.xlarge with Caddy + Let's Encrypt for HTTPS in front of the FastAPI container.
 
 ---
 
