@@ -157,11 +157,21 @@ docker build -t g4h-demo -f server/Dockerfile .
 Inside EC2:
 
 ```bash
+# Optional but recommended: HF token in .env so it survives container recreations
+echo "HF_TOKEN=hf_YOUR_TOKEN_HERE" > ~/g4h/.env
+chmod 600 ~/g4h/.env
+
+# Make a host directory for the HF cache (so the 16 GB Gemma 4 download
+# survives container stop/rm/run cycles — see the note below)
+mkdir -p ~/hf-cache
+
 docker run -d --name g4h \
     --restart unless-stopped \
     --gpus all \
+    --env-file /home/ubuntu/g4h/.env \
     -p 8000:8000 \
     -v "$(pwd)/runs:/app/runs:ro" \
+    -v "$HOME/hf-cache:/root/.cache/huggingface" \
     g4h-demo
 ```
 
@@ -170,8 +180,10 @@ What each flag does:
 - `--name g4h` — stable container name for `docker logs g4h` etc.
 - `--restart unless-stopped` — **auto-restart on process crash, on Docker restart, on EC2 reboot.** Won't restart only if you explicitly `docker stop g4h`.
 - `--gpus all` — pass the A10G into the container
+- `--env-file` — pulls `HF_TOKEN` from `~/g4h/.env` (better-rate-limit downloads, robustness if HF tightens unauth access)
 - `-p 8000:8000` — expose the port
 - `-v "$(pwd)/runs:/app/runs:ro"` — mount the model directory read-only at the path the server expects
+- `-v "$HOME/hf-cache:/root/.cache/huggingface"` — **persist the HF cache to the host.** Without this, the 16 GB Gemma 4 base model lives only inside the container's writable layer; `docker rm g4h` deletes it and the next container re-downloads from scratch (~5 min wasted). With this, the cache is on the EC2 instance's disk and survives every container lifecycle.
 
 Tail logs until ready:
 
@@ -252,8 +264,12 @@ git pull
 docker build -t g4h-demo -f server/Dockerfile .
 docker stop g4h && docker rm g4h
 docker run -d --name g4h --restart unless-stopped --gpus all \
-    -p 8000:8000 -v "$(pwd)/runs:/app/runs:ro" g4h-demo
-docker logs -f g4h    # wait for "model ready"
+    --env-file /home/ubuntu/g4h/.env \
+    -p 8000:8000 \
+    -v "$(pwd)/runs:/app/runs:ro" \
+    -v "$HOME/hf-cache:/root/.cache/huggingface" \
+    g4h-demo
+docker logs -f g4h    # wait for "model ready" — should be fast since cache survives
 ```
 
 ### Swap in a re-trained model
