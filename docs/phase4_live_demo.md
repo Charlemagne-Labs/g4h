@@ -5,7 +5,7 @@ The live demo is a FastAPI server that:
 2. Runs URL-string-only feature extraction (`src/extract.py`).
 3. Optionally runs a targeted DOM fetch via Playwright (`server/fetch.py`) to enrich the indicator list.
 4. Feeds the combined indicator string to the trained Gemma 4 classifier.
-5. Returns a verdict (`allow` / `warn` / `block`) + per-label scores + the indicators that were used.
+5. Returns a verdict (`allow` / `warn` / `block`) + per-label scores + per-phase timing + the indicators that were used.
 
 Tracks issue: [`gateguard-suite#73`](https://github.com/Charlemagne-Labs/gateguard-suite/issues/73), Phase 4.
 
@@ -13,7 +13,7 @@ Tracks issue: [`gateguard-suite#73`](https://github.com/Charlemagne-Labs/gategua
 
 ## Goal
 
-Ship a public URL where a hackathon judge can paste a URL and get a live classification within a few seconds — no notebook, no terminal, no clone-and-install dance. Demonstrates the trained model on inputs that weren't in the training set, with the extractor pipeline visible in the response.
+A public URL where a hackathon judge can paste any URL and get a live classification within a few seconds. Demonstrates the trained model on inputs that weren't in the training set, with the extractor pipeline and per-phase latency visible in the response.
 
 ---
 
@@ -24,12 +24,12 @@ server/
 ├── __init__.py
 ├── app.py              FastAPI server with /predict endpoint
 ├── fetch.py            Playwright-based targeted DOM fetch
-├── requirements.txt    FastAPI + uvicorn + playwright
+├── requirements.txt    FastAPI + uvicorn + playwright + model deps
 ├── Dockerfile          GPU-aware (nvidia/cuda base) container
 └── static/
     ├── index.html      Single-page UI — "Charley · Gemma 4 E4B demo"
     ├── style.css       Design system tokens + components
-    └── main.js         Form submit + result rendering
+    └── main.js         Form submit + result rendering + timing strip
 ```
 
 The model + extractor are loaded once at server startup via FastAPI's lifespan.
@@ -38,169 +38,329 @@ The model + extractor are loaded once at server startup via FastAPI's lifespan.
 
 ## Local dev (Mac)
 
-Pre-req: you've completed Phase 3, the artifact is at `runs/gemma4-e4b-cls/`.
+Pre-req: Phase 3 complete, artifact at `runs/gemma4-e4b-cls/`.
 
 ```bash
 cd ~/CharlemagneLabs/g4h
 source .venv/bin/activate
 
-# Install the server deps + Playwright Chromium.
+# Server-side deps + Playwright Chromium
 pip install -r server/requirements.txt
 python -m playwright install chromium
 
-# Run the server (it loads the model in-process on first start).
-uvicorn server.app:app --host 0.0.0.0 --port 8000 --reload
+# Run the server. Use the explicit venv binary if `uvicorn` from PATH ends up
+# being a different Python (a common foot-gun).
+./.venv/bin/uvicorn server.app:app --host 0.0.0.0 --port 8000
 ```
 
 Open <http://localhost:8000>. Paste a URL. Try with and without the **FETCH DOM** toggle.
 
 Expected timing on M4 Max:
-- URL-only path: <2 s total, mostly model inference
-- With DOM fetch: 3–12 s depending on the target page
+- URL-only path: <2 s end-to-end (model inference is ~1-1.5 s of that)
+- With DOM fetch: 3-12 s depending on the target page
 
-If the model fails to load, the `/health` endpoint will return `model_loaded: false` and `/predict` returns 503. Check `G4H_ARTIFACT_DIR` (defaults to `runs/gemma4-e4b-cls`).
+If the model fails to load, `/health` returns `model_loaded: false` and `/predict` returns 503. Check `G4H_ARTIFACT_DIR` (defaults to `runs/gemma4-e4b-cls`).
+
+### Local Docker (optional, mostly skip)
+
+The Dockerfile uses the `nvidia/cuda:12.1.1-runtime-ubuntu22.04` base, which is x86_64 only. On Apple Silicon, Docker Desktop runs the build under QEMU emulation: **expect 20-40 min for the build vs 8-12 min on EC2**, and CPU-only inference at ~20-30 s per request. The bare `uvicorn` path above is faster on Mac.
+
+If you really want to verify the image locally before pushing to EC2:
+
+```bash
+docker build -t g4h-demo -f server/Dockerfile .   # 20-40 min on M4 (QEMU)
+docker run --rm -p 8000:8000 -v "$(pwd)/runs:/app/runs:ro" g4h-demo
+```
+
+But the recommended path is: skip local Docker, build directly on EC2 (faster, no emulation).
 
 ---
 
-## Local Docker build
+## Recommended path — Docker on AWS EC2 g5.xlarge
 
-The Dockerfile is GPU-aware (`nvidia/cuda:12.1.1-runtime-ubuntu22.04` base) so the same image runs on CPU laptops or GPU instances.
+**~30 min total. ~$1/hr while running. Auto-restarts on crash. Survives EC2 reboot.**
+
+### 0. Pre-flight
+
+New AWS accounts have a default G-instance vCPU quota of 0. Check **Service Quotas → EC2 → Running On-Demand G and VT instances**. Request 4 vCPUs (g5.xlarge needs that many). Trial-account approvals are usually instant.
+
+### 1. Launch the instance
+
+AWS Console → EC2 → **Launch instance**:
+
+| Field | Value |
+|---|---|
+| Name | `g4h-demo` |
+| AMI | **Deep Learning AMI (Ubuntu 22.04) GPU PyTorch** — has CUDA + NVIDIA drivers + Docker + NVIDIA Container Toolkit pre-installed. Saves ~45 min of driver install. |
+| Instance type | **g5.xlarge** ($1.006/hr — A10G, 24 GB VRAM, 16 GB RAM) |
+| Key pair | New (`g4h-demo-key.pem`) or existing |
+| Security group | Create new (`g4h-demo-sg`): SSH (22) from **My IP**, Custom TCP (8000) from **0.0.0.0/0** (or My IP) |
+| Storage | 100 GB gp3, delete on termination ✓ |
+
+Wait ~2 min for "2/2 checks passed". Copy the **Public IPv4 DNS** (`ec2-XX-XX-XX-XX.compute-1.amazonaws.com`). Call it `$EC2` from here on.
+
+### 2. SSH + sanity check
+
+On your laptop:
 
 ```bash
-# From the repo root:
+chmod 400 ~/Downloads/g4h-demo-key.pem
+EC2=ec2-XX-XX-XX-XX.compute-1.amazonaws.com
+ssh -i ~/Downloads/g4h-demo-key.pem ubuntu@$EC2
+```
+
+Inside EC2:
+
+```bash
+docker --version       # 24.x+ pre-installed
+nvidia-smi             # should show NVIDIA A10G, 23028MiB
+docker run --rm --gpus all nvidia/cuda:12.1.1-base-ubuntu22.04 nvidia-smi
+# ↑ confirms Docker can see the GPU. Pulls a tiny image (~80 MB), takes ~20s.
+```
+
+### 3. Upload the model
+
+In a **second laptop terminal** (keep the SSH session open):
+
+```bash
+cd ~/CharlemagneLabs/g4h/runs
+[ -f gemma4-e4b-cls.tar.gz ] || tar -czf gemma4-e4b-cls.tar.gz gemma4-e4b-cls/
+scp -i ~/Downloads/g4h-demo-key.pem \
+    gemma4-e4b-cls.tar.gz \
+    ubuntu@$EC2:~/
+```
+
+Back inside EC2:
+
+```bash
+cd ~
+git clone https://github.com/Charlemagne-Labs/g4h.git
+cd g4h
+mkdir -p runs && cd runs
+tar -xzf ~/gemma4-e4b-cls.tar.gz
+cd ..
+ls runs/gemma4-e4b-cls/   # base_lm/, classifier_head.pt, etc.
+```
+
+### 4. Build the image
+
+Inside EC2:
+
+```bash
 docker build -t g4h-demo -f server/Dockerfile .
+```
 
-# Run with the artifact mounted (fastest iteration):
-docker run --rm -p 8000:8000 \
-    -v "$(pwd)/runs:/app/runs:ro" \
-    g4h-demo
+8-12 min. The slow phases: pip-installing torch/transformers/bnb (~5 min), Playwright + Chromium install (~3-5 min). Look for `Successfully tagged g4h-demo:latest`.
 
-# On a GPU host (NVIDIA Container Toolkit installed):
-docker run --rm -p 8000:8000 --gpus all \
+### 5. Run
+
+Inside EC2:
+
+```bash
+docker run -d --name g4h \
+    --restart unless-stopped \
+    --gpus all \
+    -p 8000:8000 \
     -v "$(pwd)/runs:/app/runs:ro" \
     g4h-demo
 ```
 
-For a self-contained image (artifact baked in), uncomment the `COPY runs/...` line in the Dockerfile before building. The image becomes ~5 GB larger but you can `docker push` it directly to ECR without a separate artifact volume.
+What each flag does:
+- `-d` — detached (background)
+- `--name g4h` — stable container name for `docker logs g4h` etc.
+- `--restart unless-stopped` — **auto-restart on process crash, on Docker restart, on EC2 reboot.** Won't restart only if you explicitly `docker stop g4h`.
+- `--gpus all` — pass the A10G into the container
+- `-p 8000:8000` — expose the port
+- `-v "$(pwd)/runs:/app/runs:ro"` — mount the model directory read-only at the path the server expects
+
+Tail logs until ready:
+
+```bash
+docker logs -f g4h
+# wait for:
+#   g4h.server | loading model from /app/runs/gemma4-e4b-cls
+#   Loading weights: 100%|...
+#   g4h.server | model ready (labels={0: 'allow', 1: 'warn', 2: 'block'}, max_length=256)
+#   INFO:     Application startup complete.
+```
+
+`Ctrl-C` to detach (just stops log tail, container keeps running).
+
+### 6. Test
+
+Inside EC2:
+
+```bash
+curl http://localhost:8000/health
+# {"status":"ok","model_loaded":true}
+```
+
+From your laptop:
+
+```bash
+curl http://$EC2:8000/health
+open http://$EC2:8000    # macOS — or just paste the URL in a browser
+```
+
+Try a few URLs. Watch the timing strip in the result panel — model inference should be ~80-150 ms on A10G.
+
+### 7. (Optional) Free HTTPS via Cloudflare Tunnel
+
+For sharing with judges you usually want a `https://...trycloudflare.com` link instead of raw HTTP-on-IP.
+
+Inside EC2:
+
+```bash
+curl -L --output cloudflared.deb https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64.deb
+sudo dpkg -i cloudflared.deb
+sudo apt install -y tmux
+
+tmux new -s tunnel
+cloudflared tunnel --url http://localhost:8000
+# Prints: https://something-random-words.trycloudflare.com — your public URL.
+# Ctrl-B then D to detach the tmux session (tunnel keeps running).
+# To reattach: tmux attach -t tunnel
+```
+
+The tunnel runs until the EC2 instance stops or you Ctrl-C it. After an EC2 stop/start, re-run the tmux + cloudflared commands.
 
 ---
 
-## Deploy on AWS
+## Day-2 operations
 
-Three production-ish paths, ordered by setup cost. For a hackathon demo, **path A (EC2 g5.xlarge)** is the right tradeoff.
+### Watch what's happening
 
-### Path A — EC2 g5.xlarge (recommended)
+```bash
+docker logs -f g4h               # live log stream
+docker logs --tail 100 g4h       # last 100 lines
+docker stats g4h                 # live CPU / memory / GPU / network
+docker ps                        # is it running?
+docker ps -a                     # 'Up X' = running, 'Exited' = died
+```
 
-A10G GPU, 24 GB VRAM, $1.006/hr on-demand. The model fits with headroom; latency is ~1–2 s per inference.
+### Restart the container (without rebuilding)
 
-**One-time setup:**
+```bash
+docker restart g4h               # ~10s downtime
+```
 
-1. **Pick a region with g5 capacity** — `us-east-1`, `us-west-2`, `eu-west-1` are the most reliable. Check **EC2 → Instance types → Filter by g5.xlarge** for availability.
+### Pull updated code, rebuild, swap
 
-2. **Launch an EC2 instance:**
-   - AMI: **Deep Learning AMI (Ubuntu 22.04) — NVIDIA driver pre-installed**. Saves you a 45-minute driver install.
-   - Instance type: `g5.xlarge`
-   - Storage: 100 GB gp3 (the Docker image + base + Chromium adds up)
-   - Security group: **inbound TCP 8000 from 0.0.0.0/0** (or restrict to your IP if you want auth-via-obscurity). **Inbound TCP 22** for SSH.
-   - Key pair: pick one you have a `.pem` for.
+```bash
+cd ~/g4h
+git pull
+docker build -t g4h-demo -f server/Dockerfile .
+docker stop g4h && docker rm g4h
+docker run -d --name g4h --restart unless-stopped --gpus all \
+    -p 8000:8000 -v "$(pwd)/runs:/app/runs:ro" g4h-demo
+docker logs -f g4h    # wait for "model ready"
+```
 
-3. **SSH in and install Docker + NVIDIA container toolkit:**
-   ```bash
-   ssh -i ~/.ssh/yourkey.pem ubuntu@<EC2-PUBLIC-DNS>
+### Swap in a re-trained model
 
-   # Docker is usually pre-installed on the Deep Learning AMI. If not:
-   curl -fsSL https://get.docker.com | sudo sh
-   sudo usermod -aG docker ubuntu
-   newgrp docker
-   ```
+```bash
+# On your laptop:
+scp -i ~/Downloads/g4h-demo-key.pem \
+    new-model.tar.gz ubuntu@$EC2:~/
 
-4. **Get the code + artifact onto the box:**
-   ```bash
-   git clone https://github.com/Charlemagne-Labs/g4h.git
-   cd g4h
-   # Copy your trained tarball from your laptop to the EC2 instance:
-   #   scp -i ~/.ssh/yourkey.pem ~/Downloads/gemma4-e4b-cls.tar.gz ubuntu@<EC2-PUBLIC-DNS>:~/g4h/runs/
-   mkdir -p runs && cd runs && tar -xzf gemma4-e4b-cls.tar.gz && cd ..
-   ```
+# On EC2:
+cd ~/g4h/runs
+rm -rf gemma4-e4b-cls
+tar -xzf ~/new-model.tar.gz
+docker restart g4h    # picks up new model on lifespan reload
+```
 
-5. **Build and run:**
-   ```bash
-   docker build -t g4h-demo -f server/Dockerfile .
-   docker run -d --name g4h --restart unless-stopped \
-       --gpus all -p 8000:8000 \
-       -v "$(pwd)/runs:/app/runs:ro" \
-       g4h-demo
-   docker logs -f g4h  # wait for "model ready" line
-   ```
+### Stop overnight to save money
 
-6. **Test:**
-   ```bash
-   curl http://<EC2-PUBLIC-DNS>:8000/health
-   # {"status":"ok","model_loaded":true}
-   ```
+```
+AWS console → EC2 → select instance → Instance state → Stop instance
+(don't pick Terminate — that destroys the instance and storage)
+```
 
-7. **Open the UI**: <http://EC2-PUBLIC-DNS:8000>. Done.
-
-**Cost**: g5.xlarge is $1.006/hr. Run it during judging, stop it overnight (`aws ec2 stop-instances --instance-ids i-...`). Storage costs $0.10/GB-month. A weekend of demo time runs under $50.
-
-### Path B — AWS App Runner (no GPU)
-
-App Runner gives you a managed container endpoint with HTTPS for free. **No GPU** — CPU inference of Gemma 4 takes 20–30 s per request, which is borderline unusable for a live demo. Skip unless you really don't want to manage EC2.
-
-### Path C — ECS Fargate with GPU
-
-Newer Fargate-with-GPU support exists in some regions. Cheaper for spiky usage than a 24/7 EC2 but more setup (task definitions, ALB, IAM roles). Worth it for a production deployment, overkill for a hackathon.
+Stopped instance bills only storage (~$10/month for 100 GB EBS gp3). When you Start it back up:
+- **Public DNS changes** — note the new one
+- `docker start g4h` (container is preserved across stop/start)
+- Re-run the Cloudflare tunnel command (the URL also changes)
 
 ---
 
-## HTTPS for the demo
+## What auto-restart will and won't handle
 
-Free Tier-friendly options:
+`--restart unless-stopped` covers:
 
-- **Cloudflare Tunnel** (recommended) — no inbound port forwarding, free TLS, ~5-min setup:
-  ```bash
-  curl -L --output cloudflared.deb https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64.deb
-  sudo dpkg -i cloudflared.deb
-  cloudflared tunnel --url http://localhost:8000  # gives you a https://<random>.trycloudflare.com URL
-  ```
-- **AWS Application Load Balancer + ACM cert** — proper production setup, ~15 min, $16/mo.
-- **Just leave it on HTTP** for a hackathon demo. The URL classifier doesn't process secrets.
+- Server crashes (Python exception, OOM kill) → restart immediately
+- Docker daemon restart → container starts when daemon does
+- EC2 instance reboot → docker starts on boot, container starts with it
+
+Caveats it does NOT cover:
+
+- **Broken startup state** (model dir gone, GPU driver dead): container will crash → restart → crash → restart, forever. Check `docker ps -a` for a climbing restart count, and `docker logs --tail 200 g4h` for the actual error.
+- **Server hang** (uvicorn deadlock, but process still running): Docker can't detect this. Add a `HEALTHCHECK` directive to the Dockerfile if you want this caught. (Skipped for hackathon scope.)
+- **EC2 instance terminated**: terminal — nothing survives. Don't click Terminate when you mean Stop.
 
 ---
 
-## Failure-mode reference
+## Failure-mode quick reference
 
 | Symptom | Likely cause | Fix |
 |---|---|---|
-| Server starts but `/health` returns `model_loaded: false` | `G4H_ARTIFACT_DIR` doesn't exist or is empty | Mount the artifact volume; check `docker logs g4h` for the path it tried |
-| `/predict` times out at exactly 10 s with `fetch:error:{"reason":"TimeoutError"}` | Target site is slow / hanging / blocked | Reduce expectations; the URL-only path still produced a verdict |
-| Playwright errors with `Executable doesn't exist` | Chromium not installed in the container | The Dockerfile runs `playwright install` — rebuild without cache: `docker build --no-cache ...` |
-| OOM during startup on g5.xlarge | Some other process holding GPU memory | `docker rm -f g4h && nvidia-smi` to confirm; then re-run |
-| Target site returns a captcha or blocks Playwright | Anti-bot detection caught our fingerprint | Best-effort already; bumping the Chrome version string in `server/fetch.py:_USER_AGENT` sometimes helps. Some sites just refuse headless browsers full stop. |
-| `verdict-tag` shows `allow` for a known-phishing URL | URL-only extractor saw nothing alarming (subtle attack relying on page content) | Try the FETCH DOM toggle — header + form-action signals usually flip it |
+| `Permission denied (publickey)` on SSH | Wrong .pem perms | `chmod 400 ~/Downloads/g4h-demo-key.pem` |
+| `docker: Cannot connect to the Docker daemon` after fresh install | User not in docker group | `sudo usermod -aG docker ubuntu` then log out + back in |
+| Connection refused on port 8000 from laptop | Security group missing port 8000 rule | Fix in AWS console |
+| Build OOM during pip install | Accidentally picked smaller instance (t2/t3) | Confirm `g5.xlarge`; it has 16 GB RAM |
+| `nvidia-smi` works but `docker run --gpus all` fails | NVIDIA Container Toolkit missing | `sudo apt install -y nvidia-container-toolkit && sudo systemctl restart docker` |
+| Container exits immediately, `docker logs` shows artifact path error | Volume not mounted right | Check `-v "$(pwd)/runs:/app/runs:ro"` — the `runs/gemma4-e4b-cls/` dir must exist on the host at the path you pass |
+| `/predict` errors with `model not loaded` | Model failed to load at startup | `docker logs g4h` to see the actual exception; usually wrong path or missing files |
+| Playwright fetch times out at 10s on every URL | Target site blocking the bot fingerprint | Best-effort already; some sites refuse headless browsers full stop |
+| Cloudflare tunnel disconnected | Tunnel process killed (SSH session ended without tmux) | Re-run inside `tmux new -s tunnel` so it survives logouts |
+
+---
+
+## Cost reference
+
+| Item | Cost | Notes |
+|---|---|---|
+| g5.xlarge running | $1.006/hr | Stop when not in use |
+| g5.xlarge stopped, 100 GB EBS gp3 attached | ~$8/month | Storage only |
+| Data transfer out | $0.09/GB | First 100 GB/month free |
+| **Estimate for a weekend of judging** | **~$25-50** | Conservative — running ~24 hours of compute, idle the rest |
+
+If you're on the AWS Free Trial $300 credit, you've got plenty of headroom.
 
 ---
 
 ## Sign-off checklist
 
-Phase 4 is done when all of these are checked:
+Phase 4 is done when:
 
-- [ ] `uvicorn server.app:app` runs locally on Mac and `/predict` works end-to-end
-- [ ] `docker build` + `docker run` produces a working container locally
-- [ ] EC2 g5.xlarge is provisioned and the container is running
-- [ ] Public URL is reachable (with or without HTTPS)
+- [ ] `docker build` produces a working image on EC2
+- [ ] `docker run` with `--restart unless-stopped --gpus all` starts the container; `docker logs g4h` shows "model ready"
+- [ ] `curl http://$EC2:8000/health` returns `model_loaded: true`
+- [ ] Browser at `http://$EC2:8000` loads the Charley demo UI
 - [ ] At least 3 live URLs classified end-to-end with sensible verdicts:
-  - one obvious-phishing (IP hostname, no HTTPS) → `block`
-  - one trusted brand (github.com, google.com) → `allow`
-  - one borderline / brand-impersonation lookalike → `warn` or `block`
-- [ ] Costs reviewed and the instance is set to stop outside of demo hours
-- [ ] Public URL is added to the hackathon submission
+  - one obvious phishing (IP hostname, no HTTPS) → block
+  - one trusted brand (github.com, google.com) → allow
+  - one borderline / brand-impersonation lookalike → warn or block
+- [ ] (Optional) Cloudflare Tunnel running, public HTTPS URL works
+- [ ] Stop schedule planned (or accept the ~$24/day burn)
+- [ ] Demo URL added to the hackathon submission
+
+---
+
+## Alternative deployment paths (not recommended for this hackathon)
+
+These exist for completeness but require more setup than they're worth for a 2-3 day demo:
+
+- **AWS App Runner** — managed container with free HTTPS, but **no GPU**. CPU inference of Gemma 4 takes 20-30 s/request, borderline unusable for live demos.
+- **ECS Fargate with GPU** — pay-per-use, cheaper for sporadic traffic, but task-definition + ALB + IAM setup eats 1-2 hours. Worth it for production, overkill here.
+- **Bare uvicorn on EC2 under systemd** — works fine, but you trade Docker's auto-restart and reproducibility for one less abstraction. Use Docker.
 
 ---
 
 ## What's intentionally NOT in this phase
 
-- **Per-request authentication / rate limiting.** This is a hackathon demo, not a production service. If you leave the URL public after judging, add an API key.
-- **Caching.** Identical URLs re-run the full pipeline. For low traffic during demos, fine.
-- **Quantization for CPU-only inference.** The model could be ONNX-exported or merged + 8-bit quantized to run reasonably on CPU. Out of scope; revisit if cost becomes a concern.
-- **Database / history.** Predictions are not persisted. If you want a "recent classifications" feature, add a small SQLite store under `server/` — but skip for the demo.
+- **Per-request authentication / rate limiting.** Hackathon demo, not a production service. If you leave the URL public after judging, add an API key (FastAPI's `APIKeyHeader` is ~5 lines).
+- **Caching.** Identical URLs re-run the full pipeline. Fine for low-volume demos.
+- **Quantization for CPU-only inference.** The model could be merged + ONNX-quantized to run reasonably on CPU. Out of scope; revisit if cost is an issue.
+- **Prediction history / database.** Not persisted. Add a small SQLite store under `server/` if you want "recent classifications" — but skip for the demo.
+- **HEALTHCHECK in Dockerfile.** Docker's `--restart` catches crashes but not hangs. Add `HEALTHCHECK CMD curl -f http://localhost:8000/health` if you want hang-detection.
