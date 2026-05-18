@@ -123,8 +123,8 @@ g4h/
 
 ## Future work
 
-- **Dataset expansion.** Training used 3,259 indicator strings. A larger corpus from a richer extraction pipeline and broader URL feeds would test generalization across more attack patterns and surface tail indicator types the model is under-trained on. Bringing in the data is straightforward (it's just a CSV); the extractor itself would stay as a separate internal component.
-- **Richer DOM extraction.** The live demo's Playwright fetcher implements ~6 DOM-based indicators (HSTS / CSP / clickjack-protection headers, login-form analysis, canonical link, trusted-CDN scripts). The training data has ~25 more DOM-derivable signals (page text classification, fingerprinting checks, etc.) that would require a deeper page-rendering pass — out of scope for the hackathon demo.
+- **Dataset expansion.** Training used 3,259 indicator strings. A larger corpus with broader URL feeds (live OpenPhish / PhishTank streams, varied geographies, more brand families) would test generalization across more attack patterns and surface tail indicators the model is under-trained on. The pipeline accepts any CSV with `text` and `label` columns — drop in a bigger one and re-run [`notebooks/02_train_colab.ipynb`](notebooks/02_train_colab.ipynb).
+- **Richer feature extraction.** This repo ships `src/extract.py` (12 URL-only indicators, clean-room) and `server/fetch.py` (6 more from a Playwright DOM/header pass). The training data contains ~25 additional indicator types — HTML form-action analysis, CSP policy parsing, mixed-content detection, brand-impersonation against richer brand lists, etc. — that a fuller extractor would cover. The current implementation is the minimum that demonstrates the end-to-end pipeline on live URLs.
 - **ONNX export for on-device inference.** The trained adapter could be merged into the base and exported to ONNX for sub-second CPU inference, removing the GPU-instance cost.
 - **Per-request authentication.** The live demo is currently open; for any long-lived production use, adding an API key to the `/predict` endpoint is a ~5-line change.
 
@@ -136,6 +136,6 @@ Apache 2.0 — see [`LICENSE`](LICENSE). Matches the license of `google/gemma-4-
 
 ## Acknowledgments
 
-- Built on Google DeepMind's [Gemma 4](https://ai.google.dev/gemma/docs/core/model_card_4) family. The model card was the source of truth for architecture details (PLE, layer counts, vocab size).
-- Classifier-head wrapper pattern is a clean-room reimplementation informed by prior internal work on the same task with a Gemma 3 base. The `g4h` repo is the open-source port.
-- Phishing-indicator format and the training dataset format originate from an internal feature-extraction pipeline at Charlemagne Labs. The pipeline itself is not part of this repo; only the indicator strings it produced (as flat CSV) were used as model inputs.
+- Built on Google DeepMind's [Gemma 4](https://ai.google.dev/gemma/docs/core/model_card_4) family. The model card was the source of truth for architecture details (Per-Layer Embeddings, layer counts, vocab size).
+- The classifier-head wrapper is a last-token-pooled `nn.Linear` over a causal LM's final hidden state — a standard pattern for adapting decoder-only models to sequence classification.
+- The training dataset is a labeled CSV of phishing-indicator strings in the format `category:name:{json-args}`. The minimal extractor in this repo (`src/extract.py` + `server/fetch.py`) produces the same shape from a URL and a Playwright DOM pass.
