@@ -91,7 +91,7 @@ AWS Console → EC2 → **Launch instance**:
 | Field | Value |
 |---|---|
 | Name | `g4h-demo` |
-| AMI | **Deep Learning AMI (Ubuntu 22.04) GPU PyTorch** — has CUDA + NVIDIA drivers + Docker + NVIDIA Container Toolkit pre-installed. Saves ~45 min of driver install. |
+| AMI | **Deep Learning OSS Nvidia Driver AMI GPU PyTorch 2.11 (Ubuntu 24.04)** (e.g. `ami-082ecb0714b440c33` in us-east-1, x86). Has CUDA + NVIDIA drivers + Docker + NVIDIA Container Toolkit pre-installed. **Skip** the "Base", "ARM64", and "Neuron" variants — those don't match what the Dockerfile expects. |
 | Instance type | **g5.xlarge** ($1.006/hr — A10G, 24 GB VRAM, 16 GB RAM) |
 | Key pair | New (`g4h-demo-key.pem`) or existing |
 | Security group | Create new (`g4h-demo-sg`): SSH (22) from **My IP**, Custom TCP (8000) from **0.0.0.0/0** (or My IP) |
